@@ -1,0 +1,40 @@
+{
+  "apps": [
+    {
+      "name": "Node-Tele-Dev",
+      "script": "npm run dev",
+      "instances": 1,
+      "log_date_format": "DD-MM-YY HH:mm:ss Z",
+      "autorestart": true,
+      "watch": false,
+      "exec_mode": "fork",
+      "out_file": "./log/out.log",
+      "error_file": "./log/error.log",
+      "env": {
+        "NODE_ENV": "development",
+        "ignore_watch": [
+          "./node_modules",
+          "./public",
+          "./.DS_Store",
+          "./package.json",
+          "./yarn.lock"
+        ]
+      }
+    },
+    {
+      "name": "Node-Tel-PRO",
+      "script": "npm start",
+      "instances": 1,
+      "log_date_format": "DD-MM-YY HH:mm:ss Z",
+      "autorestart": true,
+      "watch": false,
+      "exec_mode": "fork",
+      "out_file": "./log/out.log",
+      "error_file": "./log/error.log",
+      "env": {
+        "NODE_ENV": "production",
+        "FORCE_COLOR": "1"
+      }
+    }
+  ]
+}

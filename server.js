@@ -4,11 +4,13 @@ import "./startup/load_env.js"; // ensures dotenv is loaded first
 // OpenTelemetry must hook into all modules before they load
 // If you import express before instrumentation, OpenTelemetry won't work!
 // ============================================================================
-import "./instrumentation.js";
-import { loggerProvider } from "./instrumentation.js";
+import "./telemetry/instrumentation.js";
+import { loggerProvider } from "./telemetry/instrumentation.js";
 
 import express from "express";
-import logger from "./logger.js";
+import logger from "./telemetry/logger.js";
+import { registerRoutes } from "./routes/index.js";
+import { connectDatabase, disconnectDatabase } from "./startup/db.js";
 
 const app = express();
 const port = process.env.PORT || 9000;
@@ -33,44 +35,10 @@ app.use((req, res, next) => {
 });
 
 // ============================================================================
-// ROUTES: Define your API endpoints
-// Each log is automatically traced and sent to SigNoz
+// ROUTES: Register all application routes
+// Routes are organized in controllers/routes folders for better maintainability
 // ============================================================================
-
-// GET / - Root endpoint
-app.get("/", (req, res) => {
-  logger.info("Root endpoint accessed");
-  return res.json({ msg: "Hey There" });
-});
-
-// GET /api/health - Health check endpoint
-// Shows how to use different log levels (debug < info < warn < error)
-app.get("/api/health", (req, res) => {
-  logger.debug("Health check endpoint called");
-  return res.json({ status: "healthy", timestamp: new Date().toISOString() });
-});
-
-// GET /error - Route that throws an error (handled by error middleware)
-app.get("/error", (req, res, next) => {
-  next(new Error("Something went wrong"));
-});
-
-// GET /api/error - Error endpoint simulation
-// Demonstrates error logging in SigNoz
-app.get("/api/error", (req, res) => {
-  logger.error("Error endpoint accessed - simulating an error", {
-    endpoint: "/api/error",
-    errorType: "simulation",
-  });
-  return res.status(500).json({ error: "Something went wrong!" });
-});
-
-// POST /api/data - Receive JSON data
-// Shows how to log request bodies and metadata
-app.post("/api/data", (req, res) => {
-  logger.info("Data received", { body: req.body });
-  return res.json({ received: true, data: req.body });
-});
+registerRoutes(app);
 
 // ============================================================================
 // ERROR MIDDLEWARE: Centralized error handler
@@ -103,35 +71,54 @@ app.use((err, req, res, next) => {
 // START SERVER: Listen on port 9000
 // All requests will be traced and sent to SigNoz
 // ============================================================================
-const server = app.listen(port, () => {
-  logger.info(`Server is running on local port ${port}`, {
-    port,
-    environment: process.env.NODE_ENV,
-    serviceName: process.env.OTEL_SERVICE_NAME,
-    version: process.env.OTEL_SERVICE_VERSION,
-  });
-});
+const startServer = async () => {
+  try {
+    // Connect to MongoDB before starting the server
+    await connectDatabase();
 
-// ============================================================================
-// GRACEFUL SHUTDOWN: Ensure logs are flushed before exit
-// This is critical - without this, batched logs won't be sent to SigNoz
-// ============================================================================
-const gracefulShutdown = async () => {
-  logger.info("Server shutting down gracefully...");
+    const server = app.listen(port, () => {
+      logger.info(`Server is running on local port ${port}`, {
+        port,
+        environment: process.env.NODE_ENV,
+        serviceName: process.env.OTEL_SERVICE_NAME,
+        version: process.env.OTEL_SERVICE_VERSION,
+      });
+    });
 
-  server.close(async () => {
-    console.log("Server closed");
+    // ============================================================================
+    // GRACEFUL SHUTDOWN: Ensure logs are flushed and database disconnected
+    // This is critical - without this, batched logs won't be sent to SigNoz
+    // ============================================================================
+    const gracefulShutdown = async () => {
+      logger.info("Server shutting down gracefully...");
 
-    // Give a brief moment for in-flight requests to complete
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+      server.close(async () => {
+        console.log("Server closed");
 
-    // Flush all remaining logs to SigNoz
-    await loggerProvider.shutdown();
-    console.log("All logs flushed to SigNoz");
+        // Give a brief moment for in-flight requests to complete
+        await new Promise((resolve) => setTimeout(resolve, 1000));
 
-    process.exit(0);
-  });
+        // Disconnect from MongoDB
+        await disconnectDatabase();
+
+        // Flush all remaining logs to SigNoz
+        await loggerProvider.shutdown();
+        console.log("All logs flushed to SigNoz");
+
+        process.exit(0);
+      });
+    };
+
+    process.on("SIGTERM", gracefulShutdown);
+    process.on("SIGINT", gracefulShutdown);
+  } catch (error) {
+    logger.error("Failed to start server", {
+      error: error.message,
+      stack: error.stack,
+    });
+    process.exit(1);
+  }
 };
 
-process.on("SIGTERM", gracefulShutdown);
-process.on("SIGINT", gracefulShutdown);
+// Start the server
+startServer();
